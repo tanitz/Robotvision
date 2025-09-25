@@ -14,6 +14,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
         "thread": None,
         "capture": None,
         "last_frame": None,
+        "crop_frame": None,
     }
 
     # 1x1 transparent PNG placeholder (same as home.py)
@@ -41,6 +42,24 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
         alignment=ft.alignment.center,
     )
 
+    # cropped image card
+    crop_img = ft.Image(
+        src=PLACEHOLDER_DATA_URL,
+        width=640,
+        height=480,
+        fit=ft.ImageFit.CONTAIN,
+        border_radius=ft.border_radius.all(8),
+    )
+    crop_card = ft.Container(
+        content=crop_img,
+        width=640,
+        height=480,
+        padding=8,
+        bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.BLACK),
+        border_radius=ft.border_radius.all(10),
+        alignment=ft.alignment.center,
+    )
+
     def set_image_from_frame(frame):
         try:
             ok, im_arr = cv2.imencode(".png", frame)
@@ -49,6 +68,18 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
             im_b64 = base64.b64encode(im_arr.tobytes()).decode("utf-8")
             if hasattr(image_card.content, "src_base64"):
                 image_card.content.src_base64 = im_b64
+            page.update()
+        except Exception:
+            pass
+
+    def set_crop_image_from_frame(frame):
+        try:
+            ok, im_arr = cv2.imencode(".png", frame)
+            if not ok:
+                return
+            im_b64 = base64.b64encode(im_arr.tobytes()).decode("utf-8")
+            if hasattr(crop_card.content, "src_base64"):
+                crop_card.content.src_base64 = im_b64
             page.update()
         except Exception:
             pass
@@ -95,6 +126,10 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
         # reset to placeholder
         if hasattr(image_card.content, "src"):
             image_card.content.src = PLACEHOLDER_DATA_URL
+        if hasattr(crop_card.content, "src"):
+            crop_card.content.src = PLACEHOLDER_DATA_URL
+        state["last_frame"] = None
+        state["crop_frame"] = None
         page.update()
 
     # expose stop so app can call it when switching views
@@ -123,23 +158,45 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
         x = (w - size) // 2
         y = (h - size) // 2
         crop = frame[y : y + size, x : x + size]
-        state["last_frame"] = crop
-        set_image_from_frame(crop)
+        state["crop_frame"] = crop
+        set_crop_image_from_frame(crop)
+
+    def _captures_dir():
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        out_dir = os.path.join(project_root, "captures")
+        os.makedirs(out_dir, exist_ok=True)
+        return out_dir
 
     def on_capture(e):
+        # save original frame
         frame = state["last_frame"]
         if frame is None:
             page.snack_bar = ft.SnackBar(ft.Text("No frame to capture."), open=True)
             page.update()
             return
-        # save to project_root/captures
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        out_dir = os.path.join(project_root, "captures")
-        os.makedirs(out_dir, exist_ok=True)
+        out_dir = _captures_dir()
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_path = os.path.join(out_dir, f"capture_{ts}.png")
         try:
             cv2.imwrite(out_path, frame)
+            page.snack_bar = ft.SnackBar(ft.Text(f"Saved: {out_path}"), open=True)
+            page.update()
+        except Exception as ex:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Save failed: {ex}"), open=True)
+            page.update()
+
+    def on_save_crop(e):
+        # save cropped frame
+        crop = state["crop_frame"]
+        if crop is None:
+            page.snack_bar = ft.SnackBar(ft.Text("No cropped image to save."), open=True)
+            page.update()
+            return
+        out_dir = _captures_dir()
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(out_dir, f"crop_{ts}.png")
+        try:
+            cv2.imwrite(out_path, crop)
             page.snack_bar = ft.SnackBar(ft.Text(f"Saved: {out_path}"), open=True)
             page.update()
         except Exception as ex:
@@ -175,6 +232,14 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
         width=140,
         style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10), padding=16),
     )
+    save_btn = ft.FilledButton(
+        "Save",
+        icon=ft.Icons.SAVE,
+        on_click=on_save_crop,
+        height=42,
+        width=120,
+        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10), padding=16),
+    )
     test_btn = ft.OutlinedButton(
         "Test",
         icon=ft.Icons.PLAY_ARROW,
@@ -186,7 +251,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
 
     toolbar = ft.Container(
         content=ft.Row(
-            [connect_btn, crop_btn, capture_btn, test_btn],
+            [connect_btn, crop_btn, capture_btn, save_btn, test_btn],
             spacing=12,
             alignment=ft.MainAxisAlignment.CENTER,
         ),
@@ -201,6 +266,8 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
             ft.Text("Model", size=18, weight="bold"),
             image_card,
             toolbar,
+            ft.Text("Cropped", size=16, weight="bold"),
+            crop_card,
         ],
         spacing=10,
         horizontal_alignment=ft.CrossAxisAlignment.START,
