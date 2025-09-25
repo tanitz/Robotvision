@@ -255,19 +255,24 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
             spacing=12,
             alignment=ft.MainAxisAlignment.CENTER,
         ),
-        width=640,
         padding=12,
         bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.BLACK),
         border_radius=10,
     )
 
+    # วางภาพ original และ cropped ข้างกันในแถวที่ 2 (Row)
+    image_row = ft.Row(
+        [image_card, crop_card],
+        spacing=16,
+        alignment=ft.MainAxisAlignment.START,
+        vertical_alignment=ft.CrossAxisAlignment.START,
+    )
+
     return ft.Column(
         [
             ft.Text("Model", size=18, weight="bold"),
-            image_card,
-            toolbar,
-            ft.Text("Cropped", size=16, weight="bold"),
-            crop_card,
+            image_row,   # แถวที่ 2: รูปแบบ Row
+            toolbar,     # แถวที่ 3: แทบเครื่องมือ
         ],
         spacing=10,
         horizontal_alignment=ft.CrossAxisAlignment.START,
