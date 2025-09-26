@@ -61,6 +61,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
             ("angle", [("ROBOT", "angle")], True),
         ],
         "HARDWARE": [
+            ("CAMERA_NAME", [("HARDWARE", "CAMERA_NAME")], False),
             ("CAMERA_IP", [("HARDWARE", "CAMERA_IP")], False),
             ("COMPUTER_IP", [("HARDWARE", "COMPUTER_IP")], False),
             ("EXPOSURE_TIME", [("HARDWARE", "exposure_time")], True),
@@ -79,6 +80,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
             ("TOTAL", [("COUNTER", "TOTAL")], True),
             ("SUM_C", [("COUNTER", "SUM_C")], True),
         ],
+        
     }
 
     def _get_first(cfg_obj, candidates, default=""):

@@ -24,8 +24,8 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
 
         camera_frame = ft.Container(
             content=camera_img,
-            width=640,
-            height=480,
+            width=640*1.3,
+            height=480*1.3,
             padding=8,
             bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.BLACK),
             border_radius=ft.border_radius.all(10),
@@ -128,7 +128,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
     # ---------- GRID (การ์ด 10x10) ด้านขวา ----------
     grid_container = ft.Column(spacing=2)
 
-    pixel_count_text = ft.Text(size=12, color=ft.Colors.BLUE_GREY)
+    pixel_count_text = ft.Text(size=20, color=ft.Colors.BLUE_GREY)
 
     # Spacing constants used in width calculation
     COL_SPACING = 2  # spacing between cells horizontally
@@ -293,7 +293,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
     right_panel = ft.Container(
         content=ft.Column(
             [
-                ft.Text("COMPRESSOR PALLET SIZE", size=14, weight=ft.FontWeight.BOLD),
+                ft.Text("COMPRESSOR PALLET SIZE", size=16, weight=ft.FontWeight.BOLD),
                 ft.Row([tf_rows, tf_cols, tf_size, layer_pallet, apply_btn], spacing=6, alignment=ft.MainAxisAlignment.START),
                 pixel_count_text,
                 ft.Container(
@@ -311,25 +311,46 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
         margin=ft.margin.all(0),
         bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.BLACK),
         border_radius=10,
-        height=480,
-        width=0,  # placeholder, set below
+        height=480*1.3,
+        width=640,  # placeholder, set below
     )
 
     # Set initial dynamic width based on initial grid
     right_panel.width = compute_panel_width()
 
-    # ---------- LAYOUT รวม (กล้องซ้าย / กริดขวา) ----------
-    camera_and_grid = ft.Row(
-        [
-            camera_frame,
-            right_panel,
-        ],
-        spacing=40,
-        alignment=ft.MainAxisAlignment.CENTER,
-        vertical_alignment=ft.CrossAxisAlignment.START,
+    result_output = 0
+    header_card_R = ft.Container(
+        content=ft.Column(
+            [
+                ft.Text("COUNTER : "+str(result_output), size=38, weight=ft.FontWeight.BOLD),
+            ],
+            spacing=14,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        width=right_panel.width,  # ปรับให้กว้างเท่ากับกล้อง
+        height=80,
+        padding=20,
+        bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.BLACK),
+        border_radius=10,
+        alignment=ft.alignment.center,
     )
 
-    # ---------- RESULT CARD (ด้านล่างซ้าย) ----------
+    # ---------- RESULT CARD (ด้านลซ้าย) ----------
+    header_card_L = ft.Container(
+        content=ft.Column(
+            [
+                ft.Text("ROBOT VISION", size=38, weight=ft.FontWeight.BOLD),
+            ],
+            spacing=14,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        width=640*1.3,  # ปรับให้กว้างเท่ากับกล้อง
+        height=80,
+        padding=20,
+        bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.BLACK),
+        border_radius=10,
+        alignment=ft.alignment.center,
+    )
     result_output = ft.Text("No result yet.", size=14)
     result_card = ft.Container(
         content=ft.Column(
@@ -341,7 +362,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
             spacing=14,
             horizontal_alignment=ft.CrossAxisAlignment.START,
         ),
-        width=640,
+        width=640*1.3,  # ปรับให้กว้างเท่ากับกล้อง
         height=140,
         padding=12,
         bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.BLACK),
@@ -405,26 +426,26 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
     )
 
     # ---------- BOTTOM ROW (Result + Controls) ----------
-    bottom_row = ft.Row(
-        [
-            result_card,
-            bottom_controls,
-        ],
-        spacing=40,
-        alignment=ft.MainAxisAlignment.CENTER,
-        vertical_alignment=ft.CrossAxisAlignment.START,
-    )
+    # bottom_row = ft.Row(
+    #     [
+    #         result_card,
+    #         bottom_controls,
+    #     ],
+    #     spacing=40,
+    #     alignment=ft.MainAxisAlignment.CENTER,
+    #     vertical_alignment=ft.CrossAxisAlignment.START,
+    # )
 
     # สร้างเลย์เอาต์ใหม่: ซ้าย (กล้อง + ผลลัพธ์) / ขวา (กริด + ปุ่ม)
     main_layout = ft.Row(
         [
             ft.Column(
-                [camera_frame, result_card],
+                [header_card_L,camera_frame, result_card],
                 spacing=16,
                 horizontal_alignment=ft.CrossAxisAlignment.START,
             ),
             ft.Column(
-                [right_panel, bottom_controls],
+                [header_card_R,right_panel, bottom_controls],
                 spacing=16,
                 horizontal_alignment=ft.CrossAxisAlignment.START,
             ),
@@ -436,7 +457,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
 
     return ft.Column(
         [
-            ft.Text("ROBOT VISION", size=40, weight="bold"),
+            # ft.Text("ROBOT VISION", size=40, weight="bold"),
             main_layout,
         ],
         spacing=5,
