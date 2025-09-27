@@ -1,8 +1,12 @@
+import queue
 import flet as ft
 import base64
 import cv2
 import threading
 import time
+import components.tcpserver as tcpserver
+import os
+import inspect
 
 
 def build(page: ft.Page, shared: dict) -> ft.Control:
@@ -43,37 +47,259 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
         "cols": 8,   # เริ่มต้น 6 คอลัมน์
         "cell_size": 65,  # ขนาดพิกเซลของการ์ด (กว้าง/สูง)
         "layer_size": 3,  # จำนวนชั้น (floor)
+        # --- tcp / processing ---
+        "server_running": False,
+        "processing": False,
+        "processing_thread": None,
+        "last_frame": None,
+        "tcp_host": "127.0.0.1",          # <-- added
+        "tcp_port": 5001,               # <-- added
+        "tcp_server": None,
+        "message_queue": None,
+        "counter": 0,
+        
     }
+
+    # Single authoritative result text
+    result_output = ft.Text("No result yet.", size=14)
+
+    def ui_set_result(msg: str):
+        def _():
+            result_output.value = msg
+            result_output.update()
+        try:
+            page.invoke_later(_)
+        except Exception:
+            _()
+
+    # --------- เพิ่ม: ระบบ log พื้นหลังสำหรับ result_output ----------
+    # สร้างคิวและเธรดอัปเดตข้อความ (ทำครั้งแรกเท่านั้น)
+    if "ui_log_initialized" not in shared:
+        shared["ui_log_initialized"] = True
+        shared["_ui_log_queue"] = queue.Queue()
+        shared["_ui_log_running"] = True
+
+        def _ui_log_worker():
+            while shared.get("_ui_log_running"):
+                try:
+                    msg = shared["_ui_log_queue"].get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                ui_set_result(msg)
+
+        threading.Thread(target=_ui_log_worker, daemon=True, name="UIResultLogWorker").start()
+
+        def ui_log(message: str):
+            """ส่งข้อความหนึ่งบรรทัดไปแสดงที่ RESULT (ทับข้อความก่อนหน้า)"""
+            q = shared.get("_ui_log_queue")
+            if q:
+                q.put(message)
+
+        # ปรับ print ให้ส่งเข้า UI ด้วย (ยังคงโชว์ใน console)
+        _orig_print = print
+        def ui_print(*args, **kwargs):
+            msg = " ".join(str(a) for a in args)
+            ui_log(msg)
+            _orig_print(*args, **kwargs)
+
+        shared["ui_log"] = ui_log       # ใช้ส่งข้อความเดี่ยว
+        shared["ui_print"] = ui_print   # ใช้เหมือน print()
+
+    # helper ภายในไฟล์นี้ (เขียนสั้น)
+    def log(msg: str):
+        shared["ui_log"](msg)
+
+    # ----------- TCP / SERVER LOGIC -------------
+    def _message_reader(q: queue.Queue):
+        while state["server_running"]:
+            try:
+                msg = q.get(timeout=0.4)
+            except queue.Empty:
+                continue
+            # เดิม: ui_set_result(f"MSG: {msg}")
+            log(f"MSG: {msg}")
+
+    def start_tcp_server():
+        if state["server_running"]:
+            return
+        try:
+            threading.Thread(
+                target=_run_tcp_server_wrapper,
+                daemon=True,
+                name="TCPServerThread"
+            ).start()
+            state["server_running"] = True
+            log(f"Starting TCP server {state['tcp_host']}:{state['tcp_port']} ...")
+        except Exception as ex:
+            state["server_running"] = False
+            log(f"Start server error: {ex}")
+
+    def _run_tcp_server_wrapper():
+        try:
+            fn = getattr(tcpserver, "start_tcp_server")
+            sig = inspect.signature(fn)
+            print(f"[tcp] start_tcp_server signature: {sig}")
+            server_obj = None
+
+            params = set(sig.parameters.keys())
+            if {"host", "port", "message_queue"} <= params:
+                q = queue.Queue()
+                state["message_queue"] = q
+                server_obj = tcpserver.start_tcp_server(host=state["tcp_host"], port=state["tcp_port"], message_queue=q)
+                threading.Thread(target=_message_reader, args=(q,), daemon=True, name="TCPMessageReader").start()
+            elif {"host", "port"} <= params:
+                server_obj = fn(host=state["tcp_host"], port=state["tcp_port"])
+            elif len(sig.parameters) == 2:
+                # assume positional (host, port)
+                server_obj = fn(state["tcp_host"], state["tcp_port"])
+            else:
+                # fallback no-arg
+                server_obj = fn()
+            state["tcp_server"] = server_obj
+            ui_set_result(f"TCP Server running on {state['tcp_host']}:{state['tcp_port']}")
+        except Exception as ex:
+            ui_set_result(f"Server error: {ex}")
+            state["server_running"] = False
+
+    def stop_tcp_server():
+        if not state["server_running"]:
+            return
+        try:
+            if hasattr(tcpserver, "stop_server"):
+                try:
+                    tcpserver.stop_server()
+                except Exception as e:
+                    print("stop_server() error:", e)
+            srv = state.get("tcp_server")
+            if srv:
+                for m in ("stop", "close", "shutdown"):
+                    if hasattr(srv, m):
+                        try:
+                            getattr(srv, m)()
+                        except Exception:
+                            pass
+        finally:
+            pass
+            state["server_running"] = False
+            state["tcp_server"] = None
+            state["message_queue"] = None
+            ui_set_result("SERVER STOPPED.")
+            log("SERVER STOPPED.")
+
+    # ------------- PROCESSING LOGIC ---------------
+    def processing_start():
+        if state["processing"]:
+            return
+        state["processing"] = True
+        log("Processing started...")
+
+        def _consume_message():
+            if not state["processing"]:
+                return
+            q = state.get("message_queue")
+            if not q:
+                # ยังไม่มีคิว -> รอแล้วลองใหม่
+                threading.Timer(0.2, _consume_message).start()
+                return
+            try:
+                msg = q.get(timeout=0.5)
+            except queue.Empty:
+                # ไม่มีข้อความตอนนี้ -> ลองใหม่
+                threading.Timer(0.1, _consume_message).start()
+                return
+            if msg is None:
+                # ข้าม (sentinel) แล้วฟังต่อ
+                threading.Timer(0.01, _consume_message).start()
+                return
+            
+            text = str(msg).strip()
+            if text == "Capture:1":
+                log("done capture1")
+            elif text == "finnish":
+                log("finnished")
+                increment_counter()
+            else:
+                log(f"MSG: {text}")
+
+            # ต่อรอบถัดไป
+            threading.Timer(0.0, _consume_message).start()
+
+        # เริ่มรอบแรกในเธรด
+        threading.Timer(0.0, _consume_message).start()
+
+    def processing_stop():
+        if not state["processing"]:
+            return
+        state["processing"] = False
+        # ใส่ None ปลด block (ถ้ามีใครรอ)
+        q = state.get("message_queue")
+        if q:
+            try:
+                q.put_nowait(None)
+            except Exception:
+                pass
+        log("Processing stopped.")
+
+    def toggle_server(e):
+        btn: ft.Control = e.control
+        if not state["server_running"]:
+            start_tcp_server()
+            processing_start()
+            btn.text = "STOP"
+            btn.icon = ft.Icons.STOP
+            btn.style = ft.ButtonStyle(
+                bgcolor=ft.Colors.RED,
+                color=ft.Colors.WHITE,
+                shape=ft.RoundedRectangleBorder(radius=12),
+                padding=20,
+            )
+        else:
+            stop_tcp_server()
+            processing_stop()
+            btn.text = "START"
+            btn.icon = ft.Icons.PLAY_ARROW
+            btn.style = ft.ButtonStyle(
+                shape=ft.RoundedRectangleBorder(radius=12),
+                padding=20,
+            )
+        btn.update()
+
+    def reset_process(e):
+        result_output.value = "RESET. TCP Server stopped."
+        result_output.update()
 
     def camera_worker(cam_index=0):
         try:
-            state["capture"] = cv2.VideoCapture(cam_index)
-            if not state["capture"] or not state["capture"].isOpened():
-                print(f"Error: Camera {cam_index} not opened.")
+            cap = cv2.VideoCapture(cam_index)
+            state["capture"] = cap
+            if not cap or not cap.isOpened():
+                ui_set_result(f"Camera {cam_index} not opened.")
                 return
-
             while state["running"]:
-                ret, frame = state["capture"].read()
+                ret, frame = cap.read()
                 if not ret or frame is None:
                     time.sleep(0.05)
                     continue
-
                 ok, im_arr = cv2.imencode('.png', frame)
                 if not ok:
                     time.sleep(0.05)
                     continue
-
                 im_b64 = base64.b64encode(im_arr.tobytes()).decode('utf-8')
-                # camera_frame contains an Image as content
-                if hasattr(camera_frame.content, 'src_base64'):
-                    camera_frame.content.src_base64 = im_b64
+
+                def update_img(b64=im_b64):
+                    if hasattr(camera_frame.content, 'src_base64'):
+                        camera_frame.content.src_base64 = b64
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+
                 try:
-                    page.update()
+                    page.invoke_later(update_img)
                 except Exception:
-                    break
+                    update_img()
 
                 time.sleep(0.03)
-
         finally:
             if state["capture"]:
                 try:
@@ -109,21 +335,16 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
 
     def toggle(e):
         if not state["running"]:
-            start(0)
+            
             connect_btn.text = "Disconnect Camera"
             connect_btn.icon = ft.Icons.VIDEOCAM_OFF
         else:
-            stop()
+            
             connect_btn.text = "Connect Camera"
             connect_btn.icon = ft.Icons.VIDEOCAM
         connect_btn.update()
 
-    # btn = ft.ElevatedButton(
-    #     "Open Camera",
-    #     icon=ft.Icons.CAMERA_ALT_OUTLINED,
-    #     on_click=toggle,
-    #     style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10), padding=15),
-    # )
+   
 
     # ---------- GRID (การ์ด 10x10) ด้านขวา ----------
     grid_container = ft.Column(spacing=2)
@@ -318,16 +539,28 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
     # Set initial dynamic width based on initial grid
     right_panel.width = compute_panel_width()
 
-    result_output = 0
+    # Header right counter (separate from result_output)
+    counter_text = ft.Text("COUNTER : 0", size=38, weight=ft.FontWeight.BOLD)
+
+    def increment_counter():
+        state["counter"] += 1
+        def _():
+            counter_text.value = f"COUNTER : {state['counter']}"
+            counter_text.update()
+        try:
+            page.invoke_later(_)
+        except Exception:
+            _()
+
     header_card_R = ft.Container(
         content=ft.Column(
             [
-                ft.Text("COUNTER : "+str(result_output), size=38, weight=ft.FontWeight.BOLD),
+                counter_text,
             ],
             spacing=14,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         ),
-        width=right_panel.width,  # ปรับให้กว้างเท่ากับกล้อง
+        width=right_panel.width,  # will be adjusted later if needed
         height=80,
         padding=20,
         bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.BLACK),
@@ -335,7 +568,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
         alignment=ft.alignment.center,
     )
 
-    # ---------- RESULT CARD (ด้านลซ้าย) ----------
+    # ---------- RESULT CARD (ด้านซ้าย) ----------
     header_card_L = ft.Container(
         content=ft.Column(
             [
@@ -371,15 +604,9 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
 
     # ---------- CONTROL BUTTONS (ด้านล่างขวา) ----------
     def start_process(e):
-        result_output.value = "STARTED processing..."
-        result_output.update()
-
+        log("STARTED processing...")
     def reset_process(e):
-        result_output.value = "RESET."
-        # รีเซ็ต grid ค่าเดิม (ถ้าต้องการ)
-        # state["rows"], state["cols"], state["cell_size"] = 5, 8, 65
-        # build_grid(do_update=True)
-        result_output.update()
+        log("RESET.")
 
     connect_btn = ft.ElevatedButton(
         "CONNECT",
@@ -393,7 +620,7 @@ def build(page: ft.Page, shared: dict) -> ft.Control:
     start_btn = ft.FilledButton(
         "START",
         icon=ft.Icons.PLAY_ARROW,
-        on_click=start_process,
+        on_click=toggle_server,
         style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12), padding=20),
         height=50,
         width=150,
